@@ -1,0 +1,28 @@
+﻿# Python (backend)
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Node / WXT (frontend)
+node_modules/
+.output/
+.wxt/
+dist-*/
+npm-debug.log*
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Output / temp
+output/
+*.log
