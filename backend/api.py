@@ -1,12 +1,12 @@
+from dotenv import load_dotenv
+load_dotenv()
+
 import os
 import secrets
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, HttpUrl
-from slowapi import Limiter, _rate_limit_exceeded_handler
-from slowapi.errors import RateLimitExceeded
-from slowapi.util import get_remote_address
 
 from app_factory import create_app
 from core.enums import SummaryLanguage, SummaryMode
@@ -15,14 +15,12 @@ from core.schemas import SummaryRequest
 
 app = FastAPI(title="ClipMindAI API")
 
-# Безопасный дефолт CORS: без явно заданного списка origins доступ из браузера
-# запрещён. Раньше дефолт был "*", что открывало API любому сайту.
 allowed_origins = [
     origin.strip()
     for origin in os.getenv("CLIPMIND_ALLOWED_ORIGINS", "").split(",")
     if origin.strip()
 ]
-
+print("DEBUG ORIGINS =", allowed_origins)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
@@ -31,15 +29,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Ограничение частоты запросов по IP — защита от злоупотребления и перерасхода
-# квоты Gemini.
-limiter = Limiter(key_func=get_remote_address)
-app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
-
-# Необязательный токен доступа. Если CLIPMIND_API_TOKEN задан — эндпоинт
-# /summarize требует заголовок X-API-Key с этим значением. Если не задан —
-# проверка отключена (удобно для локальной разработки и CLI).
 API_TOKEN = os.getenv("CLIPMIND_API_TOKEN", "")
 
 
@@ -62,9 +51,7 @@ def health() -> dict[str, str]:
 
 
 @app.post("/summarize")
-@limiter.limit("20/minute")
 def summarize(
-    request: Request,
     body: SummaryHttpRequest,
     _: None = Depends(verify_token),
 ) -> dict[str, str]:
