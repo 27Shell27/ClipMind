@@ -1,15 +1,20 @@
-import { useState, type ReactNode } from 'react';
-import { useYouTubeTab } from '../../hooks/useYouTubeTab';
+import { useEffect, useState } from 'react';
+import { LoadingBar } from '../../components/LoadingBar';
+import { Logo } from '../../components/Logo';
+import { LanguageToggle } from '../../components/LanguageToggle';
+import { ModeSelector } from '../../components/ModeSelector';
+import { NotYouTubePage } from '../../components/NotYouTubePage';
+import { SummaryResult } from '../../components/SummaryResult';
+import { ThemeToggle } from '../../components/ThemeToggle';
 import { useSettings } from '../../hooks/useSettings';
 import { useTheme } from '../../hooks/useTheme';
+import { useYouTubeTab } from '../../hooks/useYouTubeTab';
 import { summarizeVideo } from '../../lib/api';
-import { ModeSelector } from '../../components/ModeSelector';
-import { LanguageToggle } from '../../components/LanguageToggle';
-import { LoadingBar } from '../../components/LoadingBar';
-import { SummaryResult } from '../../components/SummaryResult';
-import { NotYouTubePage } from '../../components/NotYouTubePage';
-import { ThemeToggle } from '../../components/ThemeToggle';
-import { Logo } from '../../components/Logo';
+import { t } from '../../lib/i18n';
+import { getCachedSummary, saveCachedSummary } from '../../lib/summaryCache';
+import type { SummaryMode } from '../../lib/types';
+
+const UI_LANG = 'ru' as const;
 
 type View = 'main' | 'loading' | 'result';
 
@@ -22,139 +27,236 @@ export function App() {
   const [summary, setSummary] = useState<string | null>(null);
   const [videoTitle, setVideoTitle] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [cacheLoaded, setCacheLoaded] = useState(false);
+
+  useEffect(() => {
+    if (tabLoading || !settingsLoaded) {
+      return;
+    }
+
+    if (!videoUrl) {
+      setCacheLoaded(true);
+      return;
+    }
+
+    let cancelled = false;
+
+    async function restoreCachedSummary() {
+      setCacheLoaded(false);
+
+      try {
+        const cached = await getCachedSummary(
+          videoUrl,
+          settings.mode,
+          settings.language,
+        );
+
+        if (cancelled) {
+          return;
+        }
+
+        if (cached) {
+          setSummary(cached.summary);
+          setVideoTitle(cached.videoTitle ?? null);
+          setError(null);
+          setView('result');
+          return;
+        }
+
+        setSummary(null);
+        setVideoTitle(null);
+        setError(null);
+        setView((currentView) => {
+          if (currentView === 'loading') {
+            return currentView;
+          }
+
+          return 'main';
+        });
+      } catch {
+        if (!cancelled) {
+          setView((currentView) => {
+            if (currentView === 'loading') {
+              return currentView;
+            }
+
+            return 'main';
+          });
+        }
+      } finally {
+        if (!cancelled) {
+          setCacheLoaded(true);
+        }
+      }
+    }
+
+    restoreCachedSummary();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    tabLoading,
+    settingsLoaded,
+    videoUrl,
+    settings.mode,
+    settings.language,
+  ]);
 
   const handleSummarize = async () => {
-    if (!videoUrl) return;
+    if (!videoUrl) {
+      return;
+    }
+
     setView('loading');
     setError(null);
+
     try {
-      // settings.language — это язык ПЕРЕСКАЗА, его и передаём бэкенду.
-      const result = await summarizeVideo(videoUrl, settings.mode, settings.language);
+      const result = await summarizeVideo(
+        videoUrl,
+        settings.mode,
+        settings.language,
+      );
+
       setSummary(result.summary);
       setVideoTitle(result.videoTitle ?? null);
+
+      await saveCachedSummary({
+        videoUrl,
+        mode: settings.mode,
+        language: settings.language,
+        summary: result.summary,
+        videoTitle: result.videoTitle ?? null,
+      });
+
       setView('result');
     } catch {
-      setError('Произошла ошибка. Попробуйте снова.');
+      setError(t(UI_LANG, 'errorOccurred'));
       setView('main');
     }
   };
 
-  const handleBack = () => {
+  const handleBackToMain = () => {
     setView('main');
-    setSummary(null);
-    setVideoTitle(null);
   };
 
-  // Первичная загрузка (вкладка / настройки / тема ещё не готовы)
-  if (tabLoading || !settingsLoaded || !themeLoaded) {
+  const isInitialLoading = tabLoading || !settingsLoaded || !themeLoaded || !cacheLoaded;
+
+  if (isInitialLoading) {
     return (
-      <div className="w-[340px] min-h-[200px] bg-surface-bg flex items-center justify-center">
-        <div className="w-6 h-6 border-2 border-surface-border border-t-brand rounded-full animate-spin" />
+      <div className="flex h-[420px] w-[380px] items-center justify-center bg-surface-bg text-content-primary">
+        <div className="h-8 w-8 animate-spin rounded-full border-2 border-brand border-t-transparent" />
       </div>
     );
   }
 
-  const themeButton = <ThemeToggle theme={theme} onToggle={toggleTheme} />;
-
-  // Вкладка — не YouTube
   if (!isYouTube) {
     return (
-      <div className="w-[340px] bg-surface-bg p-4">
-        <Header isYouTube={false} controls={themeButton} />
-        <NotYouTubePage />
-        <Footer />
+      <div className="w-[380px] bg-surface-bg text-content-primary">
+        <Header
+          isYouTube={false}
+          theme={theme}
+          onThemeToggle={toggleTheme}
+        />
+        <NotYouTubePage language={UI_LANG} />
       </div>
     );
   }
 
   return (
-    <div className="w-[340px] bg-surface-bg">
-      <div className="p-4 flex flex-col gap-4">
-        <Header isYouTube controls={themeButton} />
+    <div className="w-[380px] bg-surface-bg text-content-primary">
+      <Header
+        isYouTube={isYouTube}
+        theme={theme}
+        onThemeToggle={toggleTheme}
+      />
 
+      <main className="px-5 pb-5">
         {view === 'main' && (
-          <div className="flex flex-col gap-4 animate-fade-in">
-            <ModeSelector value={settings.mode} onChange={updateMode} />
-            <LanguageToggle value={settings.language} onChange={updateLanguage} />
+          <div className="animate-fade-in space-y-5">
+            <ModeSelector
+              value={settings.mode}
+              onChange={updateMode}
+              language={UI_LANG}
+            />
+
+            <LanguageToggle
+              value={settings.language}
+              onChange={updateLanguage}
+            />
 
             {error && (
-              <div className="flex items-center gap-2 bg-red-500/10 border border-red-500/40 rounded-lg px-3 py-2">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" className="shrink-0">
-                  <circle cx="12" cy="12" r="10" stroke="#ef4444" strokeWidth="1.5" />
-                  <path d="M12 8v4M12 16h.01" stroke="#ef4444" strokeWidth="2" strokeLinecap="round" />
-                </svg>
-                <p className="text-red-500 text-xs">{error}</p>
+              <div className="rounded-xl border border-brand/30 bg-brand/10 px-4 py-3 text-sm text-brand">
+                {error}
               </div>
             )}
 
             <button
+              type="button"
               onClick={handleSummarize}
+              className="w-full rounded-2xl px-5 py-4 text-base font-semibold text-white shadow-lg transition hover:scale-[1.01] active:scale-[0.99]"
               style={{ backgroundColor: '#FF0033' }}
-              className="
-                flex items-center justify-center gap-2 w-full py-3 rounded-xl
-                hover:bg-brand-hover text-white font-bold text-sm
-                transition-all duration-200
-                shadow-[0_0_20px_rgba(255,0,51,0.25)]
-                hover:shadow-[0_0_28px_rgba(255,0,51,0.45)]
-                active:scale-[0.98]
-                animate-pulse-brand
-              "
             >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
-                <path d="M12 2a10 10 0 1 0 0 20A10 10 0 0 0 12 2z" stroke="white" strokeWidth="1.5" />
-                <path d="M9 7v10l7-5-7-5z" fill="white" />
-              </svg>
-              Пересказать
+              {t(UI_LANG, 'summarizeBtn')}
             </button>
           </div>
         )}
 
-        {view === 'loading' && <LoadingBar />}
+        {view === 'loading' && <LoadingBar language={UI_LANG} />}
 
         {view === 'result' && summary && (
           <SummaryResult
             summary={summary}
             videoTitle={videoTitle}
-            mode={settings.mode}
-            onBack={handleBack}
+            mode={settings.mode as SummaryMode}
+            language={UI_LANG}
+            onBack={handleBackToMain}
           />
         )}
+      </main>
 
-        <Footer />
-      </div>
+      <Footer />
     </div>
   );
 }
 
-function Header({ isYouTube, controls }: { isYouTube: boolean; controls: ReactNode }) {
+interface HeaderProps {
+  isYouTube: boolean;
+  theme: 'light' | 'dark';
+  onThemeToggle: () => void;
+}
+
+function Header({ isYouTube, theme, onThemeToggle }: HeaderProps) {
   return (
-    <div className="flex items-center gap-2.5">
-      <div className="flex items-center justify-center w-8 h-8 bg-surface-card rounded-lg border border-surface-border">
-        <Logo size={20} />
-      </div>
-      <div>
-        <h1 className="text-content-primary text-sm font-bold leading-none tracking-tight">
-          ClipMind
-        </h1>
-        <p className="text-content-muted text-[10px] mt-0.5">на базе ИИ</p>
+    <header className="flex items-center justify-between px-5 py-4">
+      <div className="flex items-center gap-3">
+        <Logo size={34} />
+        <div>
+          <h1 className="text-lg font-bold leading-tight">ClipMind</h1>
+          <div className="mt-1 flex items-center gap-1.5 text-xs text-content-secondary">
+            <span
+              className={`h-2 w-2 rounded-full ${
+                isYouTube ? 'bg-green-500' : 'bg-content-muted'
+              }`}
+            />
+            <span>{isYouTube ? 'YouTube видео найдено' : 'Ожидание YouTube'}</span>
+          </div>
+        </div>
       </div>
 
-      <div className="ml-auto flex items-center gap-2">
-        {isYouTube && (
-          <div className="w-1.5 h-1.5 bg-green-400 rounded-full shadow-[0_0_4px_rgba(74,222,128,0.8)]" />
-        )}
-        {controls}
-      </div>
-    </div>
+      <ThemeToggle
+        theme={theme}
+        onToggle={onThemeToggle}
+        language={UI_LANG}
+      />
+    </header>
   );
 }
 
 function Footer() {
   return (
-    <div className="border-t border-surface-border pt-3">
-      <p className="text-content-faint text-[9px] text-center tracking-wider uppercase">
-        Могут присутствовать неточности
-      </p>
-    </div>
+    <footer className="px-5 pb-4 pt-2 text-center text-[11px] text-content-muted">
+      Могут присутствовать неточности
+    </footer>
   );
 }
